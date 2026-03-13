@@ -80,12 +80,74 @@ You can also plot the distribution of variables with histograms or boxplots.
 
 # Exploring Conversations data
 # add code here
+head(con, 10)
+
+# remove feedback column - unnecessary
+con_cleaned <- con[, c(1:8, 10)]
+
+# activity_step_id is "null" when a message is sent in general chat
+# let's make this NA so we can use is.na()
+n_distinct(con_cleaned$conversation_id[is.na(con_cleaned$activity_step_id)])
+con_cleaned <- con_cleaned %>%
+  mutate(activity_step_id = na_if(activity_step_id, "null"))
+n_distinct(con_cleaned$conversation_id[is.na(con_cleaned$activity_step_id)])
+
+# system is "true" or "false" in character form
+# let's make this a boolean
+typeof(con_cleaned$system)
+con_cleaned <- con_cleaned %>%
+  mutate(system = system == "true")
+typeof(con_cleaned$system)
+
+# let's turn created_at into date type (POSIXct)
+con_cleaned$created_at <- as.POSIXct(con_cleaned$created_at, format = "%Y-%m-%d %H:%M:%OS", tz = "UTC")
+
+head(con_cleaned, 10)
 
 # Exploring Activities data
 # add code here
+head(a, 10)
+
+# exclude week 2 and week 8-9 rows
+a_cleaned <- a[a$name != 'Week 2 Reading Elaboration: Mining Big Data in Education', ]
+a_cleaned <- a_cleaned[a_cleaned$name != 'Week 8–9 Group Project Help: Early Alert', ]
+
+# exclude processed column - doesn't provide any relevant data
+a_cleaned <- a_cleaned[, c(1:8, 10:12)]
+
+# started and completed are character values "true" or false
+# let's make them boolean
+a_cleaned <- a_cleaned %>%
+  mutate(started = started == "true")
+a_cleaned <- a_cleaned %>%
+  mutate(completed = completed == "true")
+
+# grade has 0, 1, or "null", let's make in integer type
+a_cleaned <- a_cleaned %>%
+  mutate(grade = as.integer(na_if(grade, "null")))
+
+# let's turn due_at into the same date format as created_at
+a_cleaned$due_at <- as.POSIXct(a_cleaned$due_at, 
+                               format = "%Y-%m-%d %H:%M:%OS", 
+                               tz = "UTC")
+
+# and the same for available_at
+a_cleaned$available_at <- as.POSIXct(a_cleaned$available_at, 
+                                     format = "%Y-%m-%d %H:%M:%OS", 
+                                     tz = "UTC")
+
+# and grade_created_at
+a_cleaned$grade_created_at <- as.POSIXct(a_cleaned$grade_created_at, 
+                                         format = "%Y-%m-%d %H:%M:%OS", 
+                                         tz = "UTC")
+
+
+head(a_cleaned, 10)
 
 # Exploring connections between datasets
 # add code here
+
+### GIANNA ADD MORE HERE ??? ###
 
 ###############################################
 ###############################################
@@ -142,6 +204,16 @@ Be sure to use all students in the `con` dataset as the basis, not just those wh
 ###############################################
 
 # add code here
+outcome <- left_join(x = con_cleaned[c('poster_id')], y = a_cleaned[c('poster_id', 'completed', 'name')], by = c('poster_id')) %>%
+  group_by(poster_id, name) %>%
+  summarise(completed = first(completed), .groups = "drop")
+
+outcome <- outcome %>%
+  mutate(failed_to_complete = (is.na(completed) | !completed))
+
+outcome <- outcome[c(1,2,4)]
+
+head(outcome, 10)
 
 ############################################### 
 ############################################### 
@@ -161,14 +233,14 @@ You should try to create a lot more features, including complex ones, that can u
 
 ```{r}
 secs_in_day = 60 * 60 * 24
-example_deadline = as.numeric(as.POSIXct("2025-03-01 05:00:00", tz = "UTC"))
+example_deadline = as.numeric(as.POSIXct("2026-03-12 05:00:00", tz = "UTC"))
 
-example_features = con %>% 
+example_features = con_cleaned %>% 
     filter(as.numeric(as.POSIXct(created_at, tz = "UTC")) < example_deadline - secs_in_day) %>%
     mutate(
       msg_len = nchar(message_text)
     ) %>% 
-    group_by(student_id) %>%
+    group_by(poster_id) %>%
     summarise(
         num_chat_conversations = n_distinct(conversation_id[is.na(activity_step_id)]),
         avg_student_msg_len = mean(msg_len[system==FALSE])
@@ -185,6 +257,15 @@ head(example_features)
 ###############################################
 
 # add code here
+
+# the two cleaned datasets are `con_cleaned` and `a_cleaned`
+# to create the features, we want data before 24 hours before the deadline
+con_filtered <- con_cleaned %>%
+  left_join(
+    a_cleaned %>% select(poster_id, due_at), by = 'poster_id') %>%
+  filter(as.numeric(difftime(due_at, created_at, units = "hours")) > 24)
+
+head(con_filtered)
 
 ###############################################
 ###############################################
