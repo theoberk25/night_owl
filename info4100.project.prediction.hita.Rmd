@@ -110,7 +110,9 @@ head(a, 10)
 
 # exclude week 2 and week 8-9 rows
 a_cleaned <- a[a$name != 'Week 2 Reading Elaboration: Mining Big Data in Education', ]
-a_cleaned <- a_cleaned[a_cleaned$name != 'Week 8–9 Group Project Help: Early Alert', ]
+a_cleaned <- a_cleaned[a_cleaned$name != 'Week 8-9 Group Project Help: Early Alert', ]
+a_cleaned <- a_cleaned %>%
+  filter(name != "Week 8 Reading Elaboration: Big Ideas in Unsupervised Learning")
 
 # exclude processed column - doesn't provide any relevant data
 a_cleaned <- a_cleaned[, c(1:8, 10:12)]
@@ -143,6 +145,7 @@ a_cleaned$grade_created_at <- as.POSIXct(a_cleaned$grade_created_at,
 
 
 head(a_cleaned, 10)
+a_cleaned %>% count(name)
 
 # Exploring connections between datasets
 # add code here
@@ -151,6 +154,51 @@ head(a_cleaned, 10)
 
 ###############################################
 ###############################################
+```
+
+```{r}
+# ── Summary statistics ──────────────────────────────────────────────────────
+summary(con_cleaned)
+summary(a_cleaned)
+
+# ── Frequency tables ────────────────────────────────────────────────────────
+table(a_cleaned$completed)
+table(a_cleaned$started)
+
+# ── Unique student counts ────────────────────────────────────────────────────
+n_distinct(con_cleaned$poster_id)   # students with at least one message
+n_distinct(a_cleaned$poster_id)     # students with at least one activity record
+
+# ── Plot 1: Completion rate by activity ─────────────────────────────────────
+a_cleaned %>%
+  group_by(name) %>%
+  summarise(completion_rate = mean(completed, na.rm = TRUE)) %>%
+  ggplot(aes(x = reorder(name, completion_rate), y = completion_rate)) +
+  geom_col(fill = "steelblue") +
+  coord_flip() +
+  scale_y_continuous(labels = scales::percent) +
+  labs(
+    title = "Completion Rate by Activity",
+    x     = NULL,
+    y     = "Completion Rate"
+  ) +
+  theme_minimal()
+
+# ── Plot 2: Message volume over time ────────────────────────────────────────
+con_cleaned %>%
+  filter(!is.na(created_at)) %>%
+  mutate(date = as.Date(created_at)) %>%
+  count(date) %>%
+  ggplot(aes(x = date, y = n)) +
+  geom_line(color = "steelblue") +
+  geom_point(size = 1.5, color = "steelblue") +
+  labs(
+    title = "Message Volume Over Time",
+    x     = "Date",
+    y     = "Number of Messages"
+  ) +
+  theme_minimal()
+  
 ```
 
 # Step 2: Define a prediction task
