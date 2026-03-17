@@ -148,33 +148,30 @@ head(a_cleaned, 10)
 a_cleaned %>% count(name)
 
 # Exploring connections between datasets
-# add code here
-
-### GIANNA ADD MORE HERE ??? ###
 
 ###############################################
 ###############################################
 ```
 
 ```{r}
-# ── Summary statistics ──────────────────────────────────────────────────────
+# Summary statistics 
 summary(con_cleaned)
 summary(a_cleaned)
 
-# ── Frequency tables ────────────────────────────────────────────────────────
+# Frequency tables 
 table(a_cleaned$completed)
 table(a_cleaned$started)
 
-# ── Unique student counts ────────────────────────────────────────────────────
+# Unique student counts 
 n_distinct(con_cleaned$poster_id)   # students with at least one message
 n_distinct(a_cleaned$poster_id)     # students with at least one activity record
 
-# ── Plot 1: Completion rate by activity ─────────────────────────────────────
+# Plot 1: Completion rate by activity 
 a_cleaned %>%
   group_by(name) %>%
   summarise(completion_rate = mean(completed, na.rm = TRUE)) %>%
   ggplot(aes(x = reorder(name, completion_rate), y = completion_rate)) +
-  geom_col(fill = "steelblue") +
+  geom_col(fill = "brown") +
   coord_flip() +
   scale_y_continuous(labels = scales::percent) +
   labs(
@@ -184,18 +181,30 @@ a_cleaned %>%
   ) +
   theme_minimal()
 
-# ── Plot 2: Message volume over time ────────────────────────────────────────
+# Plot 2: Message volume over time 
 con_cleaned %>%
   filter(!is.na(created_at)) %>%
   mutate(date = as.Date(created_at)) %>%
   count(date) %>%
   ggplot(aes(x = date, y = n)) +
-  geom_line(color = "steelblue") +
-  geom_point(size = 1.5, color = "steelblue") +
+  geom_line(color = "lightgreen") +
+  geom_point(size = 1.5, color = "blue") +
   labs(
     title = "Message Volume Over Time",
     x     = "Date",
     y     = "Number of Messages"
+  ) +
+  theme_minimal()
+
+# Plot 3: Distribution of Message Count per Student
+con_cleaned %>%
+  count(poster_id) %>%
+  ggplot(aes(x = n)) +
+  geom_histogram(bins = 20, fill = "pink", color = "white") +
+  labs(
+    title = "Distribution of Message Count per Student",
+    x = "Number of Messages",
+    y = "Number of Students"
   ) +
   theme_minimal()
   
