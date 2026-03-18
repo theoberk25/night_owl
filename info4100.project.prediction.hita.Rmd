@@ -319,10 +319,26 @@ head(example_features)
 # to create the features, we want data before 24 hours before the deadline
 con_filtered <- con_cleaned %>%
   left_join(
-    a_cleaned %>% select(poster_id, due_at), by = 'poster_id') %>%
+    a_cleaned %>% select(poster_id, activity_step_id, due_at), by = c('poster_id', 'activity_step_id')) %>%
   filter(as.numeric(difftime(due_at, created_at, units = "hours")) > 24)
 
-head(con_filtered)
+features <- con_filtered %>%
+  group_by(poster_id, activity_step_id) %>%
+  summarise(
+    user_messages_count = sum(system == FALSE),
+    system_messages_count = sum(system == TRUE),
+    total_messages = n(),
+    avg_message_characters = mean(nchar(message_text[system == FALSE])),
+    avg_time_between_user_messages_sec = ifelse(sum(system == FALSE) > 1, mean(diff(as.numeric(created_at[system == FALSE]))), NA),
+    delta_1st_message_to_due_date_hours = as.numeric(difftime(due_at[1], min(created_at[system == FALSE]), units = "hours")),
+    avg_AI_to_user_message_time_sec = ifelse(sum(system == FALSE) > 0 & sum(system == TRUE) > 0, mean(as.numeric(created_at[system == FALSE]) - sapply(as.numeric(created_at[system == FALSE]), function(x) max(as.numeric(created_at[system == TRUE & as.numeric(created_at) < x]))), na.rm = TRUE), NA),
+    started_chat_no_interactions = as.integer(sum(system == TRUE) == 1 & sum(system == FALSE) == 0),
+    total_conversation_duration = as.numeric(difftime(max(created_at), min(created_at), units = "hours"))
+  )
+
+features <- left_join(features, a_cleaned[, c("poster_id", "activity_step_id", "completed")], by = c("poster_id", "activity_step_id"))
+
+head(features, 50)
 
 ###############################################
 ###############################################
