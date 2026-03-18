@@ -313,32 +313,79 @@ head(example_features)
 ###### BEGIN INPUT: Engineer features #########
 ###############################################
 
-# add code here
+secs_in_day = 60 * 60 * 24
 
-# the two cleaned datasets are `con_cleaned` and `a_cleaned`
-# to create the features, we want data before 24 hours before the deadline
-con_filtered <- con_cleaned %>%
+all_students <- con_cleaned %>% distinct(poster_id)
+
+deadlines <- a_cleaned %>%
+  select(name, due_at) %>%
+  distinct()
+
+student_activity <- all_students %>% crossing(deadlines)
+student_activity <- student_activity %>%
+  mutate(cutoff = due_at - secs_in_day)
+
+build_features <- function(stu_act, con_data, act_data) {
+  results <- list()
+  for (i in 1:nrow(stu_act)) {
+    sid <- stu_act$poster_id[i]
+    act_name <- stu_act$name[i]
+    cut <- stu_act$cutoff[i]
+    due <- stu_act$due_at[i]
+
+    msgs <- con_data %>% filter(poster_id == sid, created_at < cut)
+    student_msgs <- msgs %>% filter(system == FALSE)
+
+    act_step_ids <- act_data %>% filter(name == act_name) %>% pull(activity_step_id) %>% unique()
+    act_msgs <- msgs %>% filter(activity_step_id %in% act_step_ids)
+    act_student_msgs <- act_msgs %>% filter(system == FALSE)
+
+    hist_activities <- act_data %>%
+      filter(poster_id == sid, due_at < due)
+    n_prev_completed <- sum(hist_activities$completed, na.rm = TRUE)
+    n_prev_started <- nrow(hist_activities)
+    prev_completion_rate <- ifelse(n_prev_started > 0, n_prev_completed / n_prev_started, 0)
+
+    curr_activity <- act_data %>%
+      filter(poster_id == sid, name == act_name)
+    started_current <- ifelse(nrow(curr_activity) > 0 && curr_activity$started[1], 1, 0)
+
+    last_msg_time <- ifelse(nrow(student_msgs) > 0,
+                            as.numeric(difftime(cut, max(student_msgs$created_at), units = "hours")),
+                            999)
+
+    results[[i]] <- tibble(
+      poster_id = sid,
+      name = act_name,
+      total_msgs = nrow(student_msgs),
+      total_activity_msgs = nrow(act_student_msgs),
+      num_conversations = n_distinct(msgs$conversation_id),
+      num_chat_conversations = n_distinct(msgs$conversation_id[is.na(msgs$activity_step_id)]),
+      avg_msg_len = ifelse(nrow(student_msgs) > 0, mean(nchar(student_msgs$message_text)), 0),
+      max_msg_len = ifelse(nrow(student_msgs) > 0, max(nchar(student_msgs$message_text)), 0),
+      hours_since_last_msg = last_msg_time,
+      active_days = n_distinct(as.Date(student_msgs$created_at)),
+      started_current_activity = started_current,
+      n_prev_completed = n_prev_completed,
+      prev_completion_rate = prev_completion_rate
+    )
+  }
+  bind_rows(results)
+}
+
+features <- build_features(student_activity, con_cleaned, a_cleaned)
+
+features <- features %>%
   left_join(
-    a_cleaned %>% select(poster_id, activity_step_id, due_at), by = c('poster_id', 'activity_step_id')) %>%
-  filter(as.numeric(difftime(due_at, created_at, units = "hours")) > 24)
-
-features <- con_filtered %>%
-  group_by(poster_id, activity_step_id) %>%
-  summarise(
-    user_messages_count = sum(system == FALSE),
-    system_messages_count = sum(system == TRUE),
-    total_messages = n(),
-    avg_message_characters = mean(nchar(message_text[system == FALSE])),
-    avg_time_between_user_messages_sec = ifelse(sum(system == FALSE) > 1, mean(diff(as.numeric(created_at[system == FALSE]))), NA),
-    delta_1st_message_to_due_date_hours = as.numeric(difftime(due_at[1], min(created_at[system == FALSE]), units = "hours")),
-    avg_AI_to_user_message_time_sec = ifelse(sum(system == FALSE) > 0 & sum(system == TRUE) > 0, mean(as.numeric(created_at[system == FALSE]) - sapply(as.numeric(created_at[system == FALSE]), function(x) max(as.numeric(created_at[system == TRUE & as.numeric(created_at) < x]))), na.rm = TRUE), NA),
-    started_chat_no_interactions = as.integer(sum(system == TRUE) == 1 & sum(system == FALSE) == 0),
-    total_conversation_duration = as.numeric(difftime(max(created_at), min(created_at), units = "hours"))
+    a_cleaned %>% select(poster_id, name, completed) %>% distinct(),
+    by = c("poster_id", "name")
   )
 
-features <- left_join(features, a_cleaned[, c("poster_id", "activity_step_id", "completed")], by = c("poster_id", "activity_step_id"))
+features <- features %>%
+  mutate(missed = as.factor(ifelse(is.na(completed) | !completed, 1, 0)))
 
-head(features, 50)
+head(features, 20)
+table(features$missed)
 
 ###############################################
 ###############################################
@@ -354,16 +401,21 @@ Identify the activity_id of the Week 7 activity and store data associated with t
 Take all the remaining data (earlier periods for prior weeks) and store them in the `train` dataset.
 
 ```{r}
-############################################### 
+###############################################
 ######## BEGIN INPUT: Split dataset ###########
 ###############################################
 
 # Identify last due elaboration activity for testing
-# add code here
 
 # Split the dataset into train and test based on the activity_ids or periods
-# test = 
-# train = 
+features_clean <- features %>%
+  mutate(across(where(is.numeric), ~replace(., is.na(.) | is.nan(.) | is.infinite(.), 0)))
+
+train <- features_clean %>% filter(grepl("Week 3|Week 6", name))
+test  <- features_clean %>% filter(grepl("Week 7", name))
+
+cat("Train rows:", nrow(train), "  missed:", sum(train$missed == 1), "\n")
+cat("Test rows:", nrow(test), "  missed:", sum(test$missed == 1), "\n")
 
 ###############################################
 ###############################################
@@ -380,22 +432,54 @@ To check how well you are doing, you should focus on your training data and comp
 Report your F1 scores on the training data below (don't forget this!).
 
 ```{r}
-############################################### 
+###############################################
 ####### BEGIN INPUT: Train and report #########
 ###############################################
 
+library(caret)
+library(randomForest)
+
 # Fit  model to training data
-# add code here
+baseline_model <- glm(missed ~ total_msgs + started_current_activity + prev_completion_rate,
+                      data = train, family = "binomial")
+
+set.seed(42)
+rf_model <- randomForest(missed ~ total_msgs + total_activity_msgs +
+                           num_conversations + num_chat_conversations +
+                           avg_msg_len + max_msg_len + hours_since_last_msg +
+                           active_days + started_current_activity +
+                           n_prev_completed + prev_completion_rate,
+                         data = train, ntree = 200, maxnodes = 15)
 
 # Get predictions
-# add code here
+baseline_pred <- ifelse(predict(baseline_model, train, type = "response") > 0.5, 1, 0)
+baseline_pred <- factor(baseline_pred, levels = c(0, 1))
+rf_pred <- predict(rf_model, train)
 
 # Compute accuracy, recall, precision, and F1
-# add code here
-F1 = 2 / (1/recall + 1/precision)
-  
+baseline_cm <- confusionMatrix(baseline_pred, train$missed, positive = "1")
+baseline_precision <- baseline_cm$byClass["Precision"]
+baseline_recall    <- baseline_cm$byClass["Recall"]
+baseline_f1        <- 2 / (1/baseline_recall + 1/baseline_precision)
+
+rf_cm <- confusionMatrix(rf_pred, train$missed, positive = "1")
+rf_precision <- rf_cm$byClass["Precision"]
+rf_recall    <- rf_cm$byClass["Recall"]
+rf_f1        <- 2 / (1/rf_recall + 1/rf_precision)
+
 # Training F1 score is ...
-F1
+cat("Baseline Training F1:", baseline_f1, "\n")
+cat("Baseline Accuracy:", baseline_cm$overall["Accuracy"], "\n")
+cat("Baseline Precision:", baseline_precision, "\n")
+cat("Baseline Recall:", baseline_recall, "\n")
+
+cat("Random Forest Training F1:", rf_f1, "\n")
+cat("RF Accuracy:", rf_cm$overall["Accuracy"], "\n")
+cat("RF Precision:", rf_precision, "\n")
+cat("RF Recall:", rf_recall, "\n")
+
+importance(rf_model)
+varImpPlot(rf_model)
 
 ###############################################
 ###############################################
@@ -407,21 +491,38 @@ F1
 Typically, you would only do this once at the very end, but for this project it is actually rather hard to do well on the test set, so you can try your model (sparingly to avoid overfitting too much) on the test data to compute the performance metrics.
 
 ```{r}
-############################################### 
+###############################################
 ####### BEGIN INPUT: Test and report ##########
 ###############################################
 
 # Make predictions on the test dataset
-# add code here
+baseline_test_pred <- ifelse(predict(baseline_model, test, type = "response") > 0.5, 1, 0)
+baseline_test_pred <- factor(baseline_test_pred, levels = c(0, 1))
+baseline_test_cm <- confusionMatrix(baseline_test_pred, test$missed, positive = "1")
+
+rf_test_pred <- predict(rf_model, test)
+rf_test_cm <- confusionMatrix(rf_test_pred, test$missed, positive = "1")
 
 # Compute F1 and at least two additional metrics
-# add code here
-F1 = 2 / (1/recall + 1/precision)
-#additional metics...
+baseline_test_f1 <- 2 / (1/baseline_test_cm$byClass["Recall"] + 1/baseline_test_cm$byClass["Precision"])
+rf_test_f1 <- 2 / (1/rf_test_cm$byClass["Recall"] + 1/rf_test_cm$byClass["Precision"])
 
 # Testing F1 score is ...
-F1
+cat("=== Baseline (Logistic Regression) ===\n")
+cat("F1:", baseline_test_f1, "\n")
+cat("\n=== Random Forest ===\n")
+cat("F1:", rf_test_f1, "\n")
+
 #additional metics...
+cat("\n=== Baseline Additional Metrics ===\n")
+cat("Accuracy:", baseline_test_cm$overall["Accuracy"], "\n")
+cat("Precision:", baseline_test_cm$byClass["Precision"], "\n")
+cat("Recall:", baseline_test_cm$byClass["Recall"], "\n")
+
+cat("\n=== Random Forest Additional Metrics ===\n")
+cat("Accuracy:", rf_test_cm$overall["Accuracy"], "\n")
+cat("Precision:", rf_test_cm$byClass["Precision"], "\n")
+cat("Recall:", rf_test_cm$byClass["Recall"], "\n")
 
 ###############################################
 ###############################################
