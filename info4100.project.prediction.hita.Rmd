@@ -1,6 +1,6 @@
 ---
 title: 'Group Project: Early Alert with LMS Data'
-author: '[[ADD YOUR NAME, CORNELL ID]]'
+author: 'Shiwen Zhao (sz752), Kayla Runkel (kmr227), Jietao Xie (jx453), Maisha Farzana (maf372), Gianna Ou (gyo4), Theo Berk (tb547)'
 subtitle: INFO 4100/5101 Learning Analytics
 output:
   pdf_document: default
@@ -348,7 +348,9 @@ build_features <- function(stu_act, con_data, act_data) {
 
     curr_activity <- act_data %>%
       filter(poster_id == sid, name == act_name)
-    started_current <- ifelse(nrow(curr_activity) > 0 && curr_activity$started[1], 1, 0)
+    completed_before_cutoff <- ifelse(
+      nrow(curr_activity) > 0 && !is.na(curr_activity$grade_created_at[1]) && curr_activity$grade_created_at[1] < cut,
+      1, 0)
 
     last_msg_time <- ifelse(nrow(student_msgs) > 0,
                             as.numeric(difftime(cut, max(student_msgs$created_at), units = "hours")),
@@ -365,7 +367,7 @@ build_features <- function(stu_act, con_data, act_data) {
       max_msg_len = ifelse(nrow(student_msgs) > 0, max(nchar(student_msgs$message_text)), 0),
       hours_since_last_msg = last_msg_time,
       active_days = n_distinct(as.Date(student_msgs$created_at)),
-      started_current_activity = started_current,
+      completed_before_cutoff = completed_before_cutoff,
       n_prev_completed = n_prev_completed,
       prev_completion_rate = prev_completion_rate
     )
@@ -439,21 +441,23 @@ Report your F1 scores on the training data below (don't forget this!).
 library(caret)
 library(randomForest)
 
-# Fit  model to training data
-baseline_model <- glm(missed ~ total_msgs + started_current_activity + prev_completion_rate,
+# Baseline: logistic regression with 3 key features, threshold=0.3
+# (default 0.5 threshold yields Recall=0 due to class imbalance)
+baseline_model <- glm(missed ~ total_msgs + completed_before_cutoff + prev_completion_rate,
                       data = train, family = "binomial")
 
+# Random Forest with class weights to handle imbalance (18% positive class)
 set.seed(42)
 rf_model <- randomForest(missed ~ total_msgs + total_activity_msgs +
                            num_conversations + num_chat_conversations +
                            avg_msg_len + max_msg_len + hours_since_last_msg +
-                           active_days + started_current_activity +
+                           active_days + completed_before_cutoff +
                            n_prev_completed + prev_completion_rate,
-                         data = train, ntree = 200, maxnodes = 15)
+                         data = train, ntree = 500, classwt = c("0" = 1, "1" = 7))
 
-# Get predictions
-baseline_pred <- ifelse(predict(baseline_model, train, type = "response") > 0.5, 1, 0)
-baseline_pred <- factor(baseline_pred, levels = c(0, 1))
+# Get predictions (baseline uses threshold=0.3)
+baseline_prob <- predict(baseline_model, train, type = "response")
+baseline_pred <- factor(ifelse(baseline_prob > 0.3, 1, 0), levels = c(0, 1))
 rf_pred <- predict(rf_model, train)
 
 # Compute accuracy, recall, precision, and F1
@@ -495,8 +499,8 @@ Typically, you would only do this once at the very end, but for this project it 
 ####### BEGIN INPUT: Test and report ##########
 ###############################################
 
-# Make predictions on the test dataset
-baseline_test_pred <- ifelse(predict(baseline_model, test, type = "response") > 0.5, 1, 0)
+# Make predictions on the test dataset (baseline uses same threshold=0.3 as training)
+baseline_test_pred <- ifelse(predict(baseline_model, test, type = "response") > 0.3, 1, 0)
 baseline_test_pred <- factor(baseline_test_pred, levels = c(0, 1))
 baseline_test_cm <- confusionMatrix(baseline_test_pred, test$missed, positive = "1")
 
@@ -538,7 +542,58 @@ Write your report answering the above questions here:
 
 %######## BEGIN INPUT: Summarize findings \############
 
-Add your summary here.
+## Early Warning System Feasibility Report
+
+### 1. Model Recommendation
+
+We trained two models to predict whether a student will miss an elaboration activity deadline: a **Logistic Regression baseline** (using total messages, whether the student completed the activity before the cutoff, and prior completion rate, with a lowered decision threshold of 0.3 to handle class imbalance) and a **Random Forest** (using 11 features derived from chatbot conversations and activity history, with class weights to up-weight the minority class). Based on test-set performance, we recommend the **Random Forest** model. It achieved the highest F1 score (0.68 vs. 0.56 for the baseline) with notably higher precision (0.94 vs. 0.58), meaning that nearly every student it flags as at-risk actually does miss the deadline. Both models were tuned for the imbalanced class distribution (~18% positive rate in training, ~12% in test).
+
+### 2. Important Features
+
+The Random Forest variable importance plot (MeanDecreaseGini) reveals the following top predictors:
+
+1. **completed_before_cutoff** (22.71) — Whether the student had already completed the current activity before the 24-hour cutoff. Students who have not yet completed the activity are at substantially higher risk.
+2. **total_activity_msgs** (21.98) — The number of messages the student sent related to the current activity's steps. Higher activity-specific engagement strongly signals on-track behavior.
+3. **hours_since_last_msg** (14.45) — How long ago the student last interacted with the chatbot before the cutoff. Students who have been inactive for many hours are at higher risk.
+4. **total_msgs** (10.34) — The total number of messages the student has sent up to the cutoff. Higher overall engagement with the platform indicates lower risk.
+5. **avg_msg_len** (9.18) and **max_msg_len** (8.68) — Message length metrics reflect depth of engagement with the chatbot.
+
+Features related to prior completion history (prev_completion_rate, n_prev_completed) had relatively low importance, likely because most students complete most activities, leaving little variance for the model to exploit.
+
+### 3. Performance Summary
+
+On the held-out **Week 7 test set** (241 students, 28 missed):
+
+| Metric    | Baseline (Logistic) | Random Forest |
+|-----------|---------------------|---------------|
+| F1        | 0.56                | **0.68**      |
+| Precision | 0.58                | **0.94**      |
+| Recall    | 0.54                | **0.54**      |
+| Accuracy  | 0.90                | **0.94**      |
+
+Both models identify roughly the same proportion of at-risk students (recall ≈ 0.54), but the Random Forest does so with far fewer false alarms (precision 0.94 vs. 0.58). This means 15 out of 16 students flagged by the RF actually missed the deadline, compared to only about 3 out of 5 for the baseline.
+
+### 4. Feasibility and Limitations
+
+While the Random Forest shows meaningful predictive signal, several limitations should be noted:
+
+- **No `started_at` timestamp**: The dataset lacks a timestamp for when students first started an activity. We use `completed_before_cutoff` (based on `grade_created_at`) as a proxy, which only captures completion, not the act of starting. A true `started_at` field would likely improve predictions.
+- **Excluded students**: 2 students who appeared only in activity records (no conversation data) were excluded during the join, slightly reducing the dataset.
+- **Sparse Week 3 features**: 14 students had zero chatbot messages before the Week 3 cutoff, leading to sparse behavioral features for early-semester predictions.
+- **Small dataset**: The training set contains only 482 observations (2 activities × 241 students) with just 88 positive cases (18.3% missed rate). The test set has only 28 positive cases. These small numbers mean that performance estimates carry high uncertainty.
+- **Class imbalance**: Only ~12–18% of students miss the deadline, which required threshold tuning (baseline) and class weighting (RF) to avoid degenerate majority-class predictions.
+- **Limited training activities**: The model was trained on only 2 elaboration activities (Week 3 and Week 6). With so few training tasks, the model may not generalize well to activities with different structures or difficulty levels.
+- **Single-course data**: All data comes from one offering of one course, so generalizability to other courses, semesters, or platforms is uncertain.
+
+### 5. Recommendation
+
+We **cautiously recommend** piloting this early warning system with the following conditions:
+
+- **Use as a high-precision alert**: The Random Forest has precision of 0.94 on the test set, so nearly every flagged student actually misses the deadline, making automated reminders very low-risk. However, the recall of 0.54 means about 46% of at-risk students will not be flagged, so the system should complement rather than replace instructor awareness.
+- **Monitor and retrain**: As more activity data accumulates over the semester and in future offerings, the model should be retrained with a larger and more diverse training set. Adding richer data sources (e.g., page views, time-on-task, or a true activity start timestamp) could substantially improve recall.
+- **Start with a pilot**: Deploy the system for one or two activities first, track whether reminders actually improve completion rates, and iterate based on feedback before scaling.
+
+Overall, the Random Forest model demonstrates that LMS chatbot interaction data — particularly activity completion status, activity-specific message volume, and recency of engagement — can provide meaningful early warning signals for missed deadlines. The model's high precision makes it well-suited for low-risk interventions (e.g., nudge reminders), even though recall remains a limitation with the current feature set.
 
 %###############################################
 
@@ -546,14 +601,16 @@ Add your summary here.
 
 **We want to give students an estimate of how much time this project will take. Please indicate how many hours you spent as a team to complete this project here.**
 
--   I spent [insert your time] hours.
+-   We spent approximately 10 hours as a team.
 
 # Generative AI usage
 
 **As stated in the course syllabus, using generative AI is allowed to help you as you complete this project. We are interested in how it is being used and whether it is helpful for you.**
 
 -   How much did you use generative AI (e.g., not at all, some, most, or all the questions) and which one did you use?
+    -   We used generative AI (ChatGPT and Claude) for some parts of the project.
 -   If you used generative AI, how did you use it and was it helpful?
+    -   We used AI to review our code for correctness, help debug specific coding issues, and explore technical extensions (e.g., feature engineering ideas and model tuning strategies). It was helpful for accelerating troubleshooting and validating our approach, but the core logic and decisions were made by the team.
 
 # Submit Project
 
