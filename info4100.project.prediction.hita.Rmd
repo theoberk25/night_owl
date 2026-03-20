@@ -356,6 +356,13 @@ build_features <- function(stu_act, con_data, act_data) {
                             as.numeric(difftime(cut, max(student_msgs$created_at), units = "hours")),
                             999)
 
+    # Text and temporal features
+    msg_texts <- student_msgs$message_text
+    pct_question <- ifelse(length(msg_texts) > 0, mean(grepl("[?]", msg_texts)), 0)
+    pct_weekend <- ifelse(nrow(student_msgs) > 0,
+                          mean(weekdays(student_msgs$created_at) %in% c("Saturday", "Sunday")), 0)
+    median_msg_len <- ifelse(length(msg_texts) > 0, median(nchar(msg_texts)), 0)
+
     results[[i]] <- tibble(
       poster_id = sid,
       name = act_name,
@@ -369,7 +376,10 @@ build_features <- function(stu_act, con_data, act_data) {
       active_days = n_distinct(as.Date(student_msgs$created_at)),
       completed_before_cutoff = completed_before_cutoff,
       n_prev_completed = n_prev_completed,
-      prev_completion_rate = prev_completion_rate
+      prev_completion_rate = prev_completion_rate,
+      pct_question = pct_question,
+      pct_weekend = pct_weekend,
+      median_msg_len = median_msg_len
     )
   }
   bind_rows(results)
@@ -452,8 +462,9 @@ rf_model <- randomForest(missed ~ total_msgs + total_activity_msgs +
                            num_conversations + num_chat_conversations +
                            avg_msg_len + max_msg_len + hours_since_last_msg +
                            active_days + completed_before_cutoff +
-                           n_prev_completed + prev_completion_rate,
-                         data = train, ntree = 500, classwt = c("0" = 1, "1" = 7))
+                           n_prev_completed + prev_completion_rate +
+                           pct_question + pct_weekend + median_msg_len,
+                         data = train, ntree = 500, classwt = c("0" = 1, "1" = 5))
 
 # Get predictions (baseline uses threshold=0.3)
 baseline_prob <- predict(baseline_model, train, type = "response")
@@ -546,17 +557,18 @@ Write your report answering the above questions here:
 
 ### 1. Model Recommendation
 
-We trained two models to predict whether a student will miss an elaboration activity deadline: a **Logistic Regression baseline** (using total messages, whether the student completed the activity before the cutoff, and prior completion rate, with a lowered decision threshold of 0.3 to handle class imbalance) and a **Random Forest** (using 11 features derived from chatbot conversations and activity history, with class weights to up-weight the minority class). Based on test-set performance, we recommend the **Random Forest** model. It achieved the highest F1 score (0.68 vs. 0.56 for the baseline) with notably higher precision (0.94 vs. 0.58), meaning that nearly every student it flags as at-risk actually does miss the deadline. Both models were tuned for the imbalanced class distribution (~18% positive rate in training, ~12% in test).
+We trained two models to predict whether a student will miss an elaboration activity deadline: a **Logistic Regression baseline** (using total messages, whether the student completed the activity before the cutoff, and prior completion rate, with a lowered decision threshold of 0.3 to handle class imbalance) and a **Random Forest** (using 14 features derived from chatbot conversations, activity history, and behavioral patterns, with class weights to up-weight the minority class). Based on test-set performance, we recommend the **Random Forest** model. It achieved the highest F1 score (0.71 vs. 0.56 for the baseline) with notably higher precision (0.94 vs. 0.58), meaning that nearly every student it flags as at-risk actually does miss the deadline. Both models were tuned for the imbalanced class distribution (~18% positive rate in training, ~12% in test).
 
 ### 2. Important Features
 
 The Random Forest variable importance plot (MeanDecreaseGini) reveals the following top predictors:
 
-1. **completed_before_cutoff** (22.71) — Whether the student had already completed the current activity before the 24-hour cutoff. Students who have not yet completed the activity are at substantially higher risk.
-2. **total_activity_msgs** (21.98) — The number of messages the student sent related to the current activity's steps. Higher activity-specific engagement strongly signals on-track behavior.
-3. **hours_since_last_msg** (14.45) — How long ago the student last interacted with the chatbot before the cutoff. Students who have been inactive for many hours are at higher risk.
-4. **total_msgs** (10.34) — The total number of messages the student has sent up to the cutoff. Higher overall engagement with the platform indicates lower risk.
-5. **avg_msg_len** (9.18) and **max_msg_len** (8.68) — Message length metrics reflect depth of engagement with the chatbot.
+1. **total_activity_msgs** (26.20) — The number of messages the student sent related to the current activity's steps before the cutoff. Higher activity-specific engagement strongly signals on-track behavior.
+2. **completed_before_cutoff** (22.95) — Whether the student had already completed the current activity before the 24-hour cutoff. Students who have not yet completed the activity are at substantially higher risk.
+3. **hours_since_last_msg** (17.49) — How long ago the student last interacted with the chatbot before the cutoff. Students who have been inactive for many hours are at higher risk.
+4. **total_msgs** (11.83) — The total number of messages the student has sent up to the cutoff. Higher overall engagement with the platform indicates lower risk.
+5. **avg_msg_len** (9.24), **max_msg_len** (8.94), and **median_msg_len** (8.09) — Message length metrics reflect depth of engagement with the chatbot.
+6. **pct_question** (5.61) and **pct_weekend** (4.10) — The proportion of messages containing questions and the proportion sent on weekends capture behavioral patterns that distinguish students who may be at risk.
 
 Features related to prior completion history (prev_completion_rate, n_prev_completed) had relatively low importance, likely because most students complete most activities, leaving little variance for the model to exploit.
 
@@ -566,12 +578,12 @@ On the held-out **Week 7 test set** (241 students, 28 missed):
 
 | Metric    | Baseline (Logistic) | Random Forest |
 |-----------|---------------------|---------------|
-| F1        | 0.56                | **0.68**      |
+| F1        | 0.56                | **0.71**      |
 | Precision | 0.58                | **0.94**      |
-| Recall    | 0.54                | **0.54**      |
-| Accuracy  | 0.90                | **0.94**      |
+| Recall    | 0.54                | **0.57**      |
+| Accuracy  | 0.90                | **0.95**      |
 
-Both models identify roughly the same proportion of at-risk students (recall ≈ 0.54), but the Random Forest does so with far fewer false alarms (precision 0.94 vs. 0.58). This means 15 out of 16 students flagged by the RF actually missed the deadline, compared to only about 3 out of 5 for the baseline.
+Both models identify a similar proportion of at-risk students, but the Random Forest does so with far fewer false alarms (precision 0.94 vs. 0.58). This means 16 out of 17 students flagged by the RF actually missed the deadline, compared to only about 3 out of 5 for the baseline.
 
 ### 4. Feasibility and Limitations
 
@@ -589,11 +601,11 @@ While the Random Forest shows meaningful predictive signal, several limitations 
 
 We **cautiously recommend** piloting this early warning system with the following conditions:
 
-- **Use as a high-precision alert**: The Random Forest has precision of 0.94 on the test set, so nearly every flagged student actually misses the deadline, making automated reminders very low-risk. However, the recall of 0.54 means about 46% of at-risk students will not be flagged, so the system should complement rather than replace instructor awareness.
+- **Use as a high-precision alert**: The Random Forest has precision of 0.94 on the test set, so nearly every flagged student actually misses the deadline, making automated reminders very low-risk. However, the recall of 0.57 means about 43% of at-risk students will not be flagged, so the system should complement rather than replace instructor awareness.
 - **Monitor and retrain**: As more activity data accumulates over the semester and in future offerings, the model should be retrained with a larger and more diverse training set. Adding richer data sources (e.g., page views, time-on-task, or a true activity start timestamp) could substantially improve recall.
 - **Start with a pilot**: Deploy the system for one or two activities first, track whether reminders actually improve completion rates, and iterate based on feedback before scaling.
 
-Overall, the Random Forest model demonstrates that LMS chatbot interaction data — particularly activity completion status, activity-specific message volume, and recency of engagement — can provide meaningful early warning signals for missed deadlines. The model's high precision makes it well-suited for low-risk interventions (e.g., nudge reminders), even though recall remains a limitation with the current feature set.
+Overall, the Random Forest model demonstrates that LMS chatbot interaction data — particularly activity-specific message volume, activity completion status, recency of engagement, and behavioral patterns like question-asking frequency — can provide meaningful early warning signals for missed deadlines. The model's high precision makes it well-suited for low-risk interventions (e.g., nudge reminders), even though recall remains a limitation with the current feature set.
 
 %###############################################
 
